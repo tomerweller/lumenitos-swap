@@ -28,6 +28,10 @@ lumenitos-swap/
 ├── contracts/
 │   ├── dex-factory/           # Pool deployment & registry
 │   ├── dex-pool/              # Core AMM logic (swaps, liquidity)
+│   │   ├── src/
+│   │   │   ├── certora_specs/ # Formal verification rules (33 rules)
+│   │   │   └── ...
+│   │   └── certora/           # Certora Sunbeam configuration
 │   ├── dex-router/            # Multi-hop swaps, deadline protection
 │   ├── dex-quoter/            # Off-chain price quotes
 │   └── dex-position-manager/  # NFT-like LP position tracking
@@ -257,6 +261,7 @@ Traditional AMMs spread liquidity across the entire price curve (0 to infinity).
 
 ## Security Considerations
 
+- **Formal Verification**: 33 properties verified using [Certora Sunbeam](https://docs.certora.com/en/latest/docs/sunbeam/index.html)
 - **No Reentrancy**: Soroban's execution model prevents reentrancy attacks
 - **Overflow Protection**: All math uses checked operations or explicit overflow handling
 - **Price Bounds**: Enforced minimum and maximum sqrt price ratios
