@@ -1,5 +1,6 @@
 #![no_std]
 
+mod invariants;
 mod liquidity;
 mod storage;
 mod swap;
