@@ -1,4 +1,4 @@
-# Stellar DEX v3
+# Lumenitos Swap
 
 A Uniswap v3-style concentrated liquidity DEX implementation on Stellar Soroban.
 
@@ -24,7 +24,7 @@ This implementation includes the core concentrated liquidity mechanics. The foll
 ## Project Structure
 
 ```
-stellar-dex-v3/
+lumenitos-swap/
 ├── contracts/
 │   ├── dex-factory/           # Pool deployment & registry
 │   ├── dex-pool/              # Core AMM logic (swaps, liquidity)
