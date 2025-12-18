@@ -6,6 +6,9 @@ mod storage;
 mod swap;
 mod tick;
 
+#[cfg(any(test, feature = "certora"))]
+mod certora_specs;
+
 use dex_types::{PoolConfig, PoolState, PositionKey, PositionInfo, TickInfo};
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
 use storage::{

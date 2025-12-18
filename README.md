@@ -188,7 +188,7 @@ soroban contract build
 The project includes comprehensive unit tests covering:
 
 - **Math Libraries** (100 tests): tick math, sqrt price math, liquidity math, swap math
-- **Pool Contract** (34 tests): initialization, tick management, fee growth
+- **Pool Contract** (126 tests): initialization, tick management, fee growth, certora specs
 - **Factory Contract** (17 tests): pool creation, fee tier management
 
 ```bash
@@ -200,12 +200,44 @@ cargo test --package dex-math
 cargo test --package dex-pool
 ```
 
+## Formal Verification
+
+The pool contract includes formal verification specifications using [Certora Sunbeam](https://docs.certora.com/en/latest/docs/sunbeam/index.html).
+
+### Verified Properties (33 rules)
+
+| Category | Rules | Description |
+|----------|-------|-------------|
+| Math | 8 | Tick/price monotonicity, bounds, rounding |
+| Pool State | 5 | State bounds, fee growth, config validity |
+| Swap | 5 | Amount signs, price direction, limits |
+| Liquidity | 7 | Position bounds, overflow protection |
+| Tick | 8 | Tick bounds, bitmap consistency |
+
+### Running Verification
+
+```bash
+# Build with certora feature
+cargo build --release --target wasm32-unknown-unknown -p dex-pool --features certora
+
+# Run formal verification (requires Certora API key)
+export CERTORAKEY=<your_key>
+cd contracts/dex-pool/certora
+certoraSorobanProver dex_pool.conf
+```
+
+See [contracts/dex-pool/certora/README.md](contracts/dex-pool/certora/README.md) for detailed documentation.
+
 ## Dependencies
 
 ```toml
 [workspace.dependencies]
 soroban-sdk = "23.0.0"
 soroban-fixed-point-math = "1.3.0"
+
+# Certora formal verification (optional)
+cvlr = { git = "https://github.com/Certora/cvlr.git", default-features = false }
+cvlr-soroban = { git = "https://github.com/Certora/cvlr-soroban.git" }
 ```
 
 ## Architecture Decisions

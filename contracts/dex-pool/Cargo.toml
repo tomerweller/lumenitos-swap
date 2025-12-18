@@ -6,10 +6,20 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+certora = ["cvlr", "cvlr-soroban", "cvlr-soroban-macros", "cvlr-soroban-derive"]
+
 [dependencies]
 soroban-sdk = { workspace = true }
 dex-types = { workspace = true }
 dex-math = { workspace = true }
+
+# Certora CVLR (optional, for formal verification)
+cvlr = { workspace = true, optional = true }
+cvlr-soroban = { workspace = true, optional = true }
+cvlr-soroban-macros = { workspace = true, optional = true }
+cvlr-soroban-derive = { workspace = true, optional = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

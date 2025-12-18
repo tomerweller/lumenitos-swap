@@ -24,3 +24,6 @@ Thumbs.db
 
 # Test artifacts
 *.profraw
+
+# Certora internal files
+.certora_internal/
