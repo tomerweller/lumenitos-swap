@@ -1,0 +1,26 @@
+# Build artifacts
+target/
+*.wasm
+
+# Soroban
+.soroban/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.pem
+*.key
+
+# Test artifacts
+*.profraw

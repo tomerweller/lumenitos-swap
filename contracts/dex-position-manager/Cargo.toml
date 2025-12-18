@@ -1,0 +1,17 @@
+[package]
+name = "dex-position-manager"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+dex-types = { workspace = true }
+dex-math = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+dex-factory = { path = "../dex-factory" }
+dex-pool = { path = "../dex-pool" }
