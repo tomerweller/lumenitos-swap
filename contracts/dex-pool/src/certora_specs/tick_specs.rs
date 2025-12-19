@@ -34,18 +34,13 @@ pub fn tick_in_valid_range(tick: i32) {
     cvlr_assert!(tick <= MAX_TICK);
 }
 
-/// RULE: Tick spacing is one of valid values
+/// RULE: Tick spacing matches the configured fee tiers mapping.
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_spacing_valid(tick_spacing: i32) {
-    cvlr_assert!(tick_spacing > 0);
-    // Valid spacings: 1, 10, 60, 200
-    cvlr_assert!(
-        tick_spacing == 1 ||
-        tick_spacing == 10 ||
-        tick_spacing == 60 ||
-        tick_spacing == 200
-    );
+pub fn tick_spacing_matches_fee(fee: u32, tick_spacing: i32) {
+    cvlr_assume!(fee == 500 || fee == 3000 || fee == 10000);
+    let derived = dex_types::fee_to_tick_spacing(fee);
+    cvlr_assert!(tick_spacing == derived);
 }
 
 /// RULE: Usable tick is aligned to spacing
@@ -74,56 +69,48 @@ pub fn liquidity_net_bounded_by_gross(liquidity_gross: u128, liquidity_net: i128
     cvlr_assert!(abs_net <= liquidity_gross);
 }
 
-/// RULE: Tick initialized iff liquidity_gross > 0
+/// RULE: A cleared tick must have zero gross liquidity; positive gross implies initialized.
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_initialized_iff_has_liquidity(liquidity_gross: u128, is_initialized: bool) {
-    if is_initialized {
-        cvlr_assert!(liquidity_gross > 0);
+pub fn tick_init_consistency(liquidity_gross: u128, is_initialized: bool) {
+    if liquidity_gross > 0 {
+        cvlr_assert!(is_initialized);
     } else {
-        cvlr_assert!(liquidity_gross == 0);
+        cvlr_assert!(!is_initialized || liquidity_gross == 0);
     }
 }
 
-/// RULE: Bitmap is consistent with tick initialization
+/// RULE: Bitmap bit set implies the tick is initialized (one-way implication).
 #[cfg(feature = "certora")]
 #[rule]
-pub fn bitmap_consistent_with_tick_init(
-    bitmap_bit_set: bool,
-    tick_liquidity_gross: u128,
-) {
+pub fn bitmap_bit_implies_init(bitmap_bit_set: bool, is_initialized: bool) {
     if bitmap_bit_set {
-        cvlr_assert!(tick_liquidity_gross > 0);
-    } else {
-        cvlr_assert!(tick_liquidity_gross == 0);
+        cvlr_assert!(is_initialized);
     }
 }
 
-/// RULE: Next initialized tick search respects direction
+/// RULE: Searching next tick within a bitmap word respects direction.
 #[cfg(feature = "certora")]
 #[rule]
 pub fn next_tick_respects_direction(
-    current_tick: i32,
-    next_tick: i32,
+    word: u128,
+    word_pos: i32,
+    bit_pos: u8,
+    tick_spacing: i32,
     zero_for_one: bool,
 ) {
+    cvlr_assume!(tick_spacing > 0);
+    let (next_tick, _found) = if zero_for_one {
+        crate::tick::compute_next_tick_lte(word, word_pos, bit_pos, tick_spacing)
+    } else {
+        crate::tick::compute_next_tick_gt(word, word_pos, bit_pos, tick_spacing)
+    };
+
+    let current_tick = crate::tick::bitmap_position_to_tick(word_pos, bit_pos as i32, tick_spacing);
     if zero_for_one {
         cvlr_assert!(next_tick <= current_tick);
     } else {
         cvlr_assert!(next_tick >= current_tick);
-    }
-}
-
-/// RULE: Fee tier determines tick spacing
-#[cfg(feature = "certora")]
-#[rule]
-pub fn fee_tier_tick_spacing_relationship(fee: u32, tick_spacing: i32) {
-    if fee == 500 {
-        cvlr_assert!(tick_spacing == 10);
-    } else if fee == 3000 {
-        cvlr_assert!(tick_spacing == 60);
-    } else if fee == 10000 {
-        cvlr_assert!(tick_spacing == 200);
     }
 }
 

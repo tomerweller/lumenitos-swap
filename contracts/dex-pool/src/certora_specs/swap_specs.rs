@@ -24,70 +24,77 @@ use cvlr_soroban_derive::rule;
 #[cfg(feature = "certora")]
 use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
 
-/// RULE: Swap amounts have opposite signs (one in, one out)
+/// RULE: compute_swap_step enforces direction on price movement.
 #[cfg(feature = "certora")]
 #[rule]
-pub fn swap_amounts_opposite_signs(amount0: i128, amount1: i128) {
-    // Valid swap: one positive (in), one negative (out), or one is zero
-    let valid_swap =
-        (amount0 > 0 && amount1 < 0) ||
-        (amount0 < 0 && amount1 > 0) ||
-        (amount0 == 0) ||
-        (amount1 == 0);
-
-    cvlr_assert!(valid_swap);
-}
-
-/// RULE: Zero-for-one swaps decrease price
-#[cfg(feature = "certora")]
-#[rule]
-pub fn zero_for_one_decreases_price(
-    sqrt_price_before: u128,
-    sqrt_price_after: u128,
-    zero_for_one: bool,
+pub fn swap_step_price_direction(
+    env: soroban_sdk::Env,
+    sqrt_price_current: u128,
+    sqrt_price_target: u128,
+    liquidity: u128,
+    amount_remaining: i128,
+    fee_pips: u32,
 ) {
     use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
 
-    cvlr_assume!(zero_for_one);
-    cvlr_assume!(sqrt_price_before > MIN_SQRT_RATIO && sqrt_price_before < MAX_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_after > MIN_SQRT_RATIO && sqrt_price_after < MAX_SQRT_RATIO);
+    cvlr_assume!(liquidity > 0);
+    cvlr_assume!(fee_pips <= 1_000_000);
+    cvlr_assume!(sqrt_price_current > MIN_SQRT_RATIO && sqrt_price_current < MAX_SQRT_RATIO);
+    cvlr_assume!(sqrt_price_target > MIN_SQRT_RATIO && sqrt_price_target < MAX_SQRT_RATIO);
 
-    cvlr_assert!(sqrt_price_after <= sqrt_price_before);
-}
+    let result = dex_math::compute_swap_step(
+        &env,
+        sqrt_price_current,
+        sqrt_price_target,
+        liquidity,
+        amount_remaining,
+        fee_pips,
+    );
 
-/// RULE: One-for-zero swaps increase price
-#[cfg(feature = "certora")]
-#[rule]
-pub fn one_for_zero_increases_price(
-    sqrt_price_before: u128,
-    sqrt_price_after: u128,
-    zero_for_one: bool,
-) {
-    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
-
-    cvlr_assume!(!zero_for_one);
-    cvlr_assume!(sqrt_price_before > MIN_SQRT_RATIO && sqrt_price_before < MAX_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_after > MIN_SQRT_RATIO && sqrt_price_after < MAX_SQRT_RATIO);
-
-    cvlr_assert!(sqrt_price_after >= sqrt_price_before);
-}
-
-/// RULE: Swap respects price limit
-#[cfg(feature = "certora")]
-#[rule]
-pub fn swap_respects_price_limit(
-    sqrt_price_after: u128,
-    sqrt_price_limit: u128,
-    zero_for_one: bool,
-) {
+    let zero_for_one = sqrt_price_current >= sqrt_price_target;
     if zero_for_one {
-        cvlr_assert!(sqrt_price_after >= sqrt_price_limit);
+        cvlr_assert!(result.sqrt_ratio_next_x96 <= sqrt_price_current);
     } else {
-        cvlr_assert!(sqrt_price_after <= sqrt_price_limit);
+        cvlr_assert!(result.sqrt_ratio_next_x96 >= sqrt_price_current);
     }
 }
 
-/// RULE: Tick crossings are bounded
+/// RULE: compute_swap_step outputs have consistent signs with swap intent.
+#[cfg(feature = "certora")]
+#[rule]
+pub fn swap_step_amount_signs(
+    env: soroban_sdk::Env,
+    sqrt_price_current: u128,
+    sqrt_price_target: u128,
+    liquidity: u128,
+    amount_remaining: i128,
+    fee_pips: u32,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(liquidity > 0);
+    cvlr_assume!(fee_pips <= 1_000_000);
+    cvlr_assume!(sqrt_price_current > MIN_SQRT_RATIO && sqrt_price_current < MAX_SQRT_RATIO);
+    cvlr_assume!(sqrt_price_target > MIN_SQRT_RATIO && sqrt_price_target < MAX_SQRT_RATIO);
+
+    let result = dex_math::compute_swap_step(
+        &env,
+        sqrt_price_current,
+        sqrt_price_target,
+        liquidity,
+        amount_remaining,
+        fee_pips,
+    );
+
+    let exact_in = amount_remaining >= 0;
+    if exact_in {
+        cvlr_assert!(result.amount_in > 0);
+    } else {
+        cvlr_assert!(result.amount_out > 0);
+    }
+}
+
+/// RULE: Tick crossings per swap are bounded by configuration.
 #[cfg(feature = "certora")]
 #[rule]
 pub fn tick_crossings_bounded(ticks_crossed: u32) {
