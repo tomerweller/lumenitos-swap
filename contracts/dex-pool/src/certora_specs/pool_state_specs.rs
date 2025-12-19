@@ -1,83 +1,196 @@
 // ============================================================================
-// POOL STATE INVARIANT SPECIFICATIONS
+// POOL STATE SPECIFICATIONS
 // ============================================================================
 //
-// These specifications verify that the pool state always maintains
-// critical invariants for concentrated liquidity.
-//
-// KEY INVARIANTS:
-// 1. Price is always within valid bounds
-// 2. Tick is consistent with sqrt price
-// 3. Liquidity is non-negative
-// 4. Fee growth is monotonically increasing
+// These specifications verify pool state invariants by calling actual
+// contract functions and reading real storage.
 //
 // ============================================================================
 
-// ============================================================================
-// FORMAL VERIFICATION RULES (Certora Sunbeam)
-// ============================================================================
+#[cfg(feature = "certora")]
+use soroban_sdk::{Address, Env};
 
 #[cfg(feature = "certora")]
 use cvlr_soroban_derive::rule;
 
 #[cfg(feature = "certora")]
-use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
+use cvlr::asserts::{cvlr_assert, cvlr_assume};
 
-/// RULE: Pool sqrt_price is always within valid bounds
+#[cfg(feature = "certora")]
+use crate::DexPool;
+
+/// RULE: After initialization, sqrt_price matches the input
 #[cfg(feature = "certora")]
 #[rule]
-pub fn price_always_in_bounds(sqrt_price_x96: u128) {
+pub fn init_sets_correct_price(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: u128,
+) {
     use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
 
-    // Valid pool states have price in bounds
-    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_x96 < MAX_SQRT_RATIO);
+    // Preconditions for valid initialization
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick_spacing > 0);
+    cvlr_assume!(fee <= 1_000_000);
 
-    cvlr_satisfy!(true);
+    // Call initialize
+    DexPool::initialize(
+        env.clone(),
+        factory,
+        token0,
+        token1,
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    // Verify state matches input
+    let state = DexPool::get_state(env.clone());
+    cvlr_assert!(state.sqrt_price_x96 == sqrt_price_x96);
 }
 
-/// RULE: Pool tick is always within valid bounds
+/// RULE: After initialization, tick is consistent with sqrt_price
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_always_in_bounds(tick: i32) {
-    use dex_types::{MAX_TICK, MIN_TICK};
-
-    cvlr_assume!(tick >= MIN_TICK);
-    cvlr_assume!(tick <= MAX_TICK);
-
-    cvlr_satisfy!(true);
-}
-
-/// RULE: Fee growth only increases (wrapping arithmetic)
-#[cfg(feature = "certora")]
-#[rule]
-pub fn fee_growth_monotonic(
-    fee_growth_before: u128,
-    fee_growth_after: u128,
+pub fn init_tick_consistent_with_price(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: u128,
 ) {
-    // Fee growth increases are bounded by half the max value
-    // (to allow for wrapping arithmetic detection)
-    let diff = fee_growth_after.wrapping_sub(fee_growth_before);
-    cvlr_assert!(diff < u128::MAX / 2);
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick_spacing > 0);
+    cvlr_assume!(fee <= 1_000_000);
+
+    DexPool::initialize(
+        env.clone(),
+        factory,
+        token0,
+        token1,
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let state = DexPool::get_state(env.clone());
+
+    // The tick should be what get_tick_at_sqrt_ratio returns for this price
+    let expected_tick = dex_math::get_tick_at_sqrt_ratio(&env, sqrt_price_x96);
+    cvlr_assert!(state.tick == expected_tick);
 }
 
-/// RULE: Fee is within valid range (max 100%)
+/// RULE: After initialization, liquidity is zero
 #[cfg(feature = "certora")]
 #[rule]
-pub fn fee_in_valid_range(fee: u32) {
-    // Fee in hundredths of bps, max 100% = 1_000_000
-    cvlr_assert!(fee <= 1_000_000);
+pub fn init_liquidity_is_zero(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick_spacing > 0);
+
+    DexPool::initialize(
+        env.clone(),
+        factory,
+        token0,
+        token1,
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let state = DexPool::get_state(env.clone());
+    cvlr_assert!(state.liquidity == 0);
 }
 
-/// RULE: Tick spacing is positive
+/// RULE: After initialization, fee growth globals are zero
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_spacing_positive(tick_spacing: i32) {
-    cvlr_assert!(tick_spacing > 0);
+pub fn init_fee_growth_is_zero(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick_spacing > 0);
+
+    DexPool::initialize(
+        env.clone(),
+        factory,
+        token0,
+        token1,
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let state = DexPool::get_state(env.clone());
+    cvlr_assert!(state.fee_growth_global_0_x128 == 0);
+    cvlr_assert!(state.fee_growth_global_1_x128 == 0);
+}
+
+/// RULE: Config stores correct tick_spacing
+#[cfg(feature = "certora")]
+#[rule]
+pub fn init_stores_tick_spacing(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    fee: u32,
+    tick_spacing: i32,
+    sqrt_price_x96: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick_spacing > 0);
+
+    DexPool::initialize(
+        env.clone(),
+        factory,
+        token0,
+        token1,
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let config = DexPool::get_config(env.clone());
+    cvlr_assert!(config.tick_spacing == tick_spacing);
+    cvlr_assert!(config.fee == fee);
 }
 
 // ============================================================================
-// TESTS (run with cargo test)
+// UNIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -111,28 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fee_growth_monotonic() {
-        let state_before = create_valid_state();
-        let mut state_after = state_before.clone();
-        state_after.fee_growth_global_0_x128 += 1000;
-        state_after.fee_growth_global_1_x128 += 2000;
-
-        let diff_0 = state_after.fee_growth_global_0_x128.wrapping_sub(state_before.fee_growth_global_0_x128);
-        let diff_1 = state_after.fee_growth_global_1_x128.wrapping_sub(state_before.fee_growth_global_1_x128);
-
-        assert!(diff_0 < u128::MAX / 2);
-        assert!(diff_1 < u128::MAX / 2);
-    }
-
-    #[test]
-    fn test_liquidity_change_on_mint() {
-        let mut state_before = create_valid_state();
-        state_before.liquidity = 1000;
-
-        let mut state_after = state_before.clone();
-        state_after.liquidity = 1500;
-
-        let expected = state_before.liquidity + 500;
-        assert_eq!(state_after.liquidity, expected);
+    fn test_fee_growth_starts_zero() {
+        let state = PoolState::new(Q96, 0);
+        assert_eq!(state.fee_growth_global_0_x128, 0);
+        assert_eq!(state.fee_growth_global_1_x128, 0);
     }
 }

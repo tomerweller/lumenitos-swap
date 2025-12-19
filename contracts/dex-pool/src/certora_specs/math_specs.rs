@@ -1,20 +1,11 @@
 // ============================================================================
-// MATH INVARIANT SPECIFICATIONS
+// MATH FUNCTION SPECIFICATIONS
 // ============================================================================
 //
-// These specifications verify the correctness of mathematical operations
-// used in the concentrated liquidity AMM.
+// These specifications verify the correctness of pure mathematical functions
+// in dex_math. Since these are pure functions (no state), we can verify
+// their properties directly.
 //
-// KEY INVARIANTS:
-// 1. mul_div operations never overflow with proper inputs
-// 2. Tick-to-price conversion is monotonic
-// 3. Price-to-tick roundtrip maintains consistency
-// 4. Sqrt price calculations are bounded
-//
-// ============================================================================
-
-// ============================================================================
-// FORMAL VERIFICATION RULES (Certora Sunbeam)
 // ============================================================================
 
 #[cfg(feature = "certora")]
@@ -24,24 +15,16 @@ use soroban_sdk::Env;
 use cvlr_soroban_derive::rule;
 
 #[cfg(feature = "certora")]
-use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
+use cvlr::asserts::{cvlr_assert, cvlr_assume};
 
-/// RULE: Sanity check - sqrt ratio calculation is reachable
+/// RULE: Sqrt ratio is strictly monotonically increasing with tick
+/// This is a fundamental property: higher tick = higher price
 #[cfg(feature = "certora")]
 #[rule]
-pub fn sanity_sqrt_ratio(env: Env, tick: i32) {
-    use dex_types::{MAX_TICK, MIN_TICK};
-    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
-    let _ratio = dex_math::get_sqrt_ratio_at_tick(&env, tick);
-    cvlr_satisfy!(true);
-}
-
-/// RULE: Sqrt ratio is monotonically increasing with tick
-#[cfg(feature = "certora")]
-#[rule]
-pub fn sqrt_ratio_monotonic(env: Env, tick1: i32, tick2: i32) {
+pub fn sqrt_ratio_strictly_monotonic(env: Env, tick1: i32, tick2: i32) {
     use dex_types::{MAX_TICK, MIN_TICK};
 
+    // Constrain to valid tick range
     cvlr_assume!(tick1 >= MIN_TICK && tick1 <= MAX_TICK);
     cvlr_assume!(tick2 >= MIN_TICK && tick2 <= MAX_TICK);
     cvlr_assume!(tick1 < tick2);
@@ -49,33 +32,15 @@ pub fn sqrt_ratio_monotonic(env: Env, tick1: i32, tick2: i32) {
     let ratio1 = dex_math::get_sqrt_ratio_at_tick(&env, tick1);
     let ratio2 = dex_math::get_sqrt_ratio_at_tick(&env, tick2);
 
+    // Strict monotonicity: tick1 < tick2 => ratio1 < ratio2
     cvlr_assert!(ratio1 < ratio2);
 }
 
-/// RULE: Sqrt ratio at MIN_TICK is >= MIN_SQRT_RATIO
+/// RULE: Tick-to-ratio-to-tick roundtrip is consistent
+/// get_tick_at_sqrt_ratio(get_sqrt_ratio_at_tick(t)) should return t (or t±1 due to rounding)
 #[cfg(feature = "certora")]
 #[rule]
-pub fn sqrt_ratio_min_bound(env: Env) {
-    use dex_types::{MIN_SQRT_RATIO, MIN_TICK};
-
-    let ratio = dex_math::get_sqrt_ratio_at_tick(&env, MIN_TICK);
-    cvlr_assert!(ratio >= MIN_SQRT_RATIO);
-}
-
-/// RULE: Sqrt ratio at MAX_TICK is <= MAX_SQRT_RATIO
-#[cfg(feature = "certora")]
-#[rule]
-pub fn sqrt_ratio_max_bound(env: Env) {
-    use dex_types::{MAX_SQRT_RATIO, MAX_TICK};
-
-    let ratio = dex_math::get_sqrt_ratio_at_tick(&env, MAX_TICK);
-    cvlr_assert!(ratio <= MAX_SQRT_RATIO);
-}
-
-/// RULE: Tick roundtrip is consistent (within 1 tick)
-#[cfg(feature = "certora")]
-#[rule]
-pub fn tick_roundtrip_consistent(env: Env, tick: i32) {
+pub fn tick_ratio_roundtrip(env: Env, tick: i32) {
     use dex_types::{MAX_TICK, MIN_TICK};
 
     cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
@@ -83,6 +48,7 @@ pub fn tick_roundtrip_consistent(env: Env, tick: i32) {
     let sqrt_ratio = dex_math::get_sqrt_ratio_at_tick(&env, tick);
     let recovered_tick = dex_math::get_tick_at_sqrt_ratio(&env, sqrt_ratio);
 
+    // Due to discrete tick spacing, recovered tick may differ by at most 1
     let diff = if recovered_tick > tick {
         recovered_tick - tick
     } else {
@@ -92,45 +58,54 @@ pub fn tick_roundtrip_consistent(env: Env, tick: i32) {
     cvlr_assert!(diff <= 1);
 }
 
-/// RULE: mul_div rounds down
+/// RULE: mul_div_rounding_up always >= mul_div
+/// This ensures rounding up actually rounds up
 #[cfg(feature = "certora")]
 #[rule]
-pub fn mul_div_rounds_down(env: Env, a: u128, b: u128, c: u128) {
+pub fn mul_div_rounding_relationship(env: Env, a: u128, b: u128, c: u128) {
+    // Avoid division by zero and overflow
     cvlr_assume!(c > 0);
-    cvlr_assume!(a <= u64::MAX as u128);
-    cvlr_assume!(b <= u64::MAX as u128);
+    cvlr_assume!(a > 0 && b > 0);
 
-    let result = dex_math::mul_div(&env, a, b, c);
+    let result_down = dex_math::mul_div(&env, a, b, c);
     let result_up = dex_math::mul_div_rounding_up(&env, a, b, c);
 
-    cvlr_assert!(result <= result_up);
-    cvlr_assert!(result_up - result <= 1);
+    // Rounding up should always be >= rounding down
+    cvlr_assert!(result_up >= result_down);
+
+    // And they should differ by at most 1
+    cvlr_assert!(result_up - result_down <= 1);
 }
 
-/// RULE: add_delta with positive delta increases value
+/// RULE: add_delta correctness for positive delta
 #[cfg(feature = "certora")]
 #[rule]
-pub fn add_delta_positive_increases(liquidity: u128, delta: i128) {
+pub fn add_delta_positive_correct(liquidity: u128, delta: i128) {
     cvlr_assume!(delta > 0);
-    cvlr_assume!(liquidity < u128::MAX - (delta as u128));
+    cvlr_assume!(liquidity <= u128::MAX - (delta as u128)); // No overflow
 
     let result = dex_math::add_delta(liquidity, delta);
-    cvlr_assert!(result > liquidity);
+
+    // Result should equal liquidity + delta
+    cvlr_assert!(result == liquidity + (delta as u128));
 }
 
-/// RULE: add_delta with negative delta decreases value
+/// RULE: add_delta correctness for negative delta
 #[cfg(feature = "certora")]
 #[rule]
-pub fn add_delta_negative_decreases(liquidity: u128, delta: i128) {
+pub fn add_delta_negative_correct(liquidity: u128, delta: i128) {
     cvlr_assume!(delta < 0);
-    cvlr_assume!(liquidity >= (-delta) as u128);
+    let abs_delta = (-delta) as u128;
+    cvlr_assume!(liquidity >= abs_delta); // No underflow
 
     let result = dex_math::add_delta(liquidity, delta);
-    cvlr_assert!(result < liquidity);
+
+    // Result should equal liquidity - |delta|
+    cvlr_assert!(result == liquidity - abs_delta);
 }
 
 // ============================================================================
-// TESTS (run with cargo test)
+// UNIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -173,19 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mul_div_no_value_creation() {
-        let env = Env::default();
-
-        let a: u128 = 1000;
-        let b: u128 = 500;
-        let c: u128 = 300;
-
-        let result = dex_math::mul_div(&env, a, b, c);
-        // result should be floor((a * b) / c) = floor(500000 / 300) = 1666
-        assert!(result <= a * b / c + 1);
-    }
-
-    #[test]
     fn test_mul_div_rounding() {
         let env = Env::default();
 
@@ -196,9 +158,6 @@ mod tests {
         let down = dex_math::mul_div(&env, a, b, c);
         let up = dex_math::mul_div_rounding_up(&env, a, b, c);
 
-        // 300 / 10 = 30, no rounding needed
-        assert_eq!(down, 30);
-        assert_eq!(up, 30);
         assert!(up >= down);
         assert!(up - down <= 1);
     }

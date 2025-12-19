@@ -2,101 +2,297 @@
 // SWAP INVARIANT SPECIFICATIONS
 // ============================================================================
 //
-// These specifications verify the correctness of swap operations in the
-// concentrated liquidity AMM.
-//
-// KEY INVARIANTS:
-// 1. Value conservation - no tokens created from nothing
-// 2. Direction consistency - price moves in expected direction
-// 3. Limit enforcement - swap respects price limits
-// 4. Amount consistency - amounts have correct signs
-// 5. Tick crossing bounds - limited crossings per swap
+// These specifications verify swap behavior by calling the actual swap
+// function and verifying price direction, amount signs, and limits.
 //
 // ============================================================================
 
-// ============================================================================
-// FORMAL VERIFICATION RULES (Certora Sunbeam)
-// ============================================================================
+#[cfg(feature = "certora")]
+use soroban_sdk::{Address, Env};
 
 #[cfg(feature = "certora")]
 use cvlr_soroban_derive::rule;
 
 #[cfg(feature = "certora")]
-use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
+use cvlr::asserts::{cvlr_assert, cvlr_assume};
 
-/// RULE: Swap amounts have opposite signs (one in, one out)
 #[cfg(feature = "certora")]
-#[rule]
-pub fn swap_amounts_opposite_signs(amount0: i128, amount1: i128) {
-    // Valid swap: one positive (in), one negative (out), or one is zero
-    let valid_swap =
-        (amount0 > 0 && amount1 < 0) ||
-        (amount0 < 0 && amount1 > 0) ||
-        (amount0 == 0) ||
-        (amount1 == 0);
+use crate::DexPool;
 
-    cvlr_assert!(valid_swap);
-}
-
-/// RULE: Zero-for-one swaps decrease price
+/// RULE: Zero-for-one swap decreases sqrt_price
+/// When swapping token0 for token1, price (in terms of token1/token0) decreases
 #[cfg(feature = "certora")]
 #[rule]
 pub fn zero_for_one_decreases_price(
-    sqrt_price_before: u128,
-    sqrt_price_after: u128,
-    zero_for_one: bool,
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    amount_specified: i128,
 ) {
     use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
 
-    cvlr_assume!(zero_for_one);
-    cvlr_assume!(sqrt_price_before > MIN_SQRT_RATIO && sqrt_price_before < MAX_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_after > MIN_SQRT_RATIO && sqrt_price_after < MAX_SQRT_RATIO);
+    // Setup preconditions
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(amount_specified > 0); // Exact input swap
 
-    cvlr_assert!(sqrt_price_after <= sqrt_price_before);
+    // Initialize pool
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let price_before = DexPool::get_state(env.clone()).sqrt_price_x96;
+
+    // Execute zero_for_one swap with price limit at minimum
+    let sqrt_price_limit = MIN_SQRT_RATIO + 1;
+    let _result = DexPool::swap(
+        env.clone(),
+        recipient,
+        true, // zero_for_one
+        amount_specified,
+        sqrt_price_limit,
+    );
+
+    let price_after = DexPool::get_state(env.clone()).sqrt_price_x96;
+
+    // Price should decrease or stay same (if no liquidity)
+    cvlr_assert!(price_after <= price_before);
 }
 
-/// RULE: One-for-zero swaps increase price
+/// RULE: One-for-zero swap increases sqrt_price
+/// When swapping token1 for token0, price (in terms of token1/token0) increases
 #[cfg(feature = "certora")]
 #[rule]
 pub fn one_for_zero_increases_price(
-    sqrt_price_before: u128,
-    sqrt_price_after: u128,
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    amount_specified: i128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    // Setup preconditions
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(amount_specified > 0); // Exact input swap
+
+    // Initialize pool
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let price_before = DexPool::get_state(env.clone()).sqrt_price_x96;
+
+    // Execute one_for_zero swap with price limit at maximum
+    let sqrt_price_limit = MAX_SQRT_RATIO - 1;
+    let _result = DexPool::swap(
+        env.clone(),
+        recipient,
+        false, // one_for_zero
+        amount_specified,
+        sqrt_price_limit,
+    );
+
+    let price_after = DexPool::get_state(env.clone()).sqrt_price_x96;
+
+    // Price should increase or stay same (if no liquidity)
+    cvlr_assert!(price_after >= price_before);
+}
+
+/// RULE: Swap amounts have opposite signs (one in, one out)
+/// If amount0 is positive (paid in), amount1 should be negative (received out)
+#[cfg(feature = "certora")]
+#[rule]
+pub fn swap_amounts_opposite_signs(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    amount_specified: i128,
     zero_for_one: bool,
 ) {
     use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
 
-    cvlr_assume!(!zero_for_one);
-    cvlr_assume!(sqrt_price_before > MIN_SQRT_RATIO && sqrt_price_before < MAX_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_after > MIN_SQRT_RATIO && sqrt_price_after < MAX_SQRT_RATIO);
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(amount_specified != 0);
 
-    cvlr_assert!(sqrt_price_after >= sqrt_price_before);
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let sqrt_price_limit = if zero_for_one {
+        MIN_SQRT_RATIO + 1
+    } else {
+        MAX_SQRT_RATIO - 1
+    };
+
+    let (amount0, amount1) = DexPool::swap(
+        env.clone(),
+        recipient,
+        zero_for_one,
+        amount_specified,
+        sqrt_price_limit,
+    );
+
+    // Valid swap: opposite signs, or one/both zero (no liquidity case)
+    let valid = (amount0 > 0 && amount1 <= 0)
+        || (amount0 <= 0 && amount1 > 0)
+        || (amount0 == 0 && amount1 == 0);
+
+    cvlr_assert!(valid);
 }
 
-/// RULE: Swap respects price limit
+/// RULE: Swap respects sqrt_price_limit
+/// After swap, price should not exceed the limit in either direction
 #[cfg(feature = "certora")]
 #[rule]
 pub fn swap_respects_price_limit(
-    sqrt_price_after: u128,
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
     sqrt_price_limit: u128,
+    recipient: Address,
+    amount_specified: i128,
     zero_for_one: bool,
 ) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(sqrt_price_limit > MIN_SQRT_RATIO && sqrt_price_limit < MAX_SQRT_RATIO);
+    cvlr_assume!(amount_specified > 0);
+
+    // Limit must be valid for direction
     if zero_for_one {
-        cvlr_assert!(sqrt_price_after >= sqrt_price_limit);
+        cvlr_assume!(sqrt_price_limit < sqrt_price_x96);
     } else {
-        cvlr_assert!(sqrt_price_after <= sqrt_price_limit);
+        cvlr_assume!(sqrt_price_limit > sqrt_price_x96);
+    }
+
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let _result = DexPool::swap(
+        env.clone(),
+        recipient,
+        zero_for_one,
+        amount_specified,
+        sqrt_price_limit,
+    );
+
+    let price_after = DexPool::get_state(env.clone()).sqrt_price_x96;
+
+    // Price should respect the limit
+    if zero_for_one {
+        cvlr_assert!(price_after >= sqrt_price_limit);
+    } else {
+        cvlr_assert!(price_after <= sqrt_price_limit);
     }
 }
 
-/// RULE: Tick crossings are bounded
+/// RULE: Tick is consistent with sqrt_price after swap
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_crossings_bounded(ticks_crossed: u32) {
-    use crate::storage::MAX_TICK_CROSSINGS_PER_SWAP;
-    cvlr_assert!(ticks_crossed <= MAX_TICK_CROSSINGS_PER_SWAP);
+pub fn tick_consistent_after_swap(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    amount_specified: i128,
+    zero_for_one: bool,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(amount_specified > 0);
+
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let sqrt_price_limit = if zero_for_one {
+        MIN_SQRT_RATIO + 1
+    } else {
+        MAX_SQRT_RATIO - 1
+    };
+
+    let _result = DexPool::swap(
+        env.clone(),
+        recipient,
+        zero_for_one,
+        amount_specified,
+        sqrt_price_limit,
+    );
+
+    let state = DexPool::get_state(env.clone());
+    let expected_tick = dex_math::get_tick_at_sqrt_ratio(&env, state.sqrt_price_x96);
+
+    // Tick should be consistent with price (within 1 due to rounding)
+    let diff = if state.tick > expected_tick {
+        state.tick - expected_tick
+    } else {
+        expected_tick - state.tick
+    };
+    cvlr_assert!(diff <= 1);
 }
 
 // ============================================================================
-// TESTS (run with cargo test)
+// UNIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -143,14 +339,5 @@ mod tests {
     fn test_tick_crossings_bounded() {
         let ticks_crossed: u32 = 35;
         assert!(ticks_crossed <= MAX_TICK_CROSSINGS_PER_SWAP);
-    }
-
-    #[test]
-    fn test_fee_proportional() {
-        let amount_in: u128 = 1_000_000;
-        let fee_pips: u32 = 3000; // 0.3%
-        let expected_fee = amount_in * (fee_pips as u128) / 1_000_000;
-
-        assert_eq!(expected_fee, 3000); // 0.3% of 1M
     }
 }

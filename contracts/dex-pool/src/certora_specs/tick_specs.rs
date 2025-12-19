@@ -2,133 +2,391 @@
 // TICK INVARIANT SPECIFICATIONS
 // ============================================================================
 //
-// These specifications verify the correctness of tick management and
-// tick bitmap operations in the concentrated liquidity AMM.
-//
-// KEY INVARIANTS:
-// 1. Tick bounds are respected
-// 2. Tick spacing alignment
-// 3. Bitmap consistency with initialized ticks
-// 4. Liquidity gross/net relationships
-// 5. Tick crossing correctness
+// These specifications verify tick management and bitmap operations by
+// calling actual contract functions and verifying tick state.
 //
 // ============================================================================
 
-// ============================================================================
-// FORMAL VERIFICATION RULES (Certora Sunbeam)
-// ============================================================================
+#[cfg(feature = "certora")]
+use soroban_sdk::{Address, Env};
 
 #[cfg(feature = "certora")]
 use cvlr_soroban_derive::rule;
 
 #[cfg(feature = "certora")]
-use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
+use cvlr::asserts::{cvlr_assert, cvlr_assume};
 
-/// RULE: Tick is within valid range
+#[cfg(feature = "certora")]
+use crate::DexPool;
+
+/// RULE: Tick is within valid range after any operation
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_in_valid_range(tick: i32) {
-    use dex_types::{MAX_TICK, MIN_TICK};
+pub fn tick_in_valid_range(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
 
-    cvlr_assert!(tick >= MIN_TICK);
-    cvlr_assert!(tick <= MAX_TICK);
-}
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
 
-/// RULE: Tick spacing is one of valid values
-#[cfg(feature = "certora")]
-#[rule]
-pub fn tick_spacing_valid(tick_spacing: i32) {
-    cvlr_assert!(tick_spacing > 0);
-    // Valid spacings: 1, 10, 60, 200
-    cvlr_assert!(
-        tick_spacing == 1 ||
-        tick_spacing == 10 ||
-        tick_spacing == 60 ||
-        tick_spacing == 200
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
     );
+
+    let state = DexPool::get_state(env.clone());
+
+    cvlr_assert!(state.tick >= MIN_TICK);
+    cvlr_assert!(state.tick <= MAX_TICK);
 }
 
-/// RULE: Usable tick is aligned to spacing
+/// RULE: Tick spacing from config is positive
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_aligned_to_spacing(tick: i32, tick_spacing: i32) {
-    use dex_types::{MAX_TICK, MIN_TICK};
+pub fn tick_spacing_positive(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    tick_spacing: i32,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
 
-    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
     cvlr_assume!(tick_spacing > 0);
 
-    let is_aligned = tick % tick_spacing == 0;
-    cvlr_assert!(is_aligned);
+    let fee: u32 = 3000;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let config = DexPool::get_config(env.clone());
+    cvlr_assert!(config.tick_spacing > 0);
+    cvlr_assert!(config.tick_spacing == tick_spacing);
 }
 
-/// RULE: Liquidity net magnitude bounded by gross
+/// RULE: Liquidity net is bounded by liquidity gross
+/// |liquidity_net| <= liquidity_gross
 #[cfg(feature = "certora")]
 #[rule]
-pub fn liquidity_net_bounded_by_gross(liquidity_gross: u128, liquidity_net: i128) {
-    let abs_net = if liquidity_net >= 0 {
-        liquidity_net as u128
+pub fn liquidity_net_bounded_by_gross(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    tick_lower: i32,
+    tick_upper: i32,
+    liquidity_amount: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(liquidity_amount > 0);
+
+    let tick_spacing: i32 = 60;
+    cvlr_assume!(tick_lower >= MIN_TICK && tick_upper <= MAX_TICK);
+    cvlr_assume!(tick_lower < tick_upper);
+    cvlr_assume!(tick_lower % tick_spacing == 0);
+    cvlr_assume!(tick_upper % tick_spacing == 0);
+
+    let fee: u32 = 3000;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    // Mint liquidity to create tick state
+    let _amounts = DexPool::mint(
+        env.clone(),
+        recipient.clone(),
+        tick_lower,
+        tick_upper,
+        liquidity_amount,
+    );
+
+    // Check lower tick
+    let lower_tick_info = DexPool::get_tick(env.clone(), tick_lower);
+    let abs_net_lower = if lower_tick_info.liquidity_net >= 0 {
+        lower_tick_info.liquidity_net as u128
     } else {
-        (-liquidity_net) as u128
+        (-lower_tick_info.liquidity_net) as u128
     };
+    cvlr_assert!(abs_net_lower <= lower_tick_info.liquidity_gross);
 
-    cvlr_assert!(abs_net <= liquidity_gross);
-}
-
-/// RULE: Tick initialized iff liquidity_gross > 0
-#[cfg(feature = "certora")]
-#[rule]
-pub fn tick_initialized_iff_has_liquidity(liquidity_gross: u128, is_initialized: bool) {
-    if is_initialized {
-        cvlr_assert!(liquidity_gross > 0);
+    // Check upper tick
+    let upper_tick_info = DexPool::get_tick(env.clone(), tick_upper);
+    let abs_net_upper = if upper_tick_info.liquidity_net >= 0 {
+        upper_tick_info.liquidity_net as u128
     } else {
-        cvlr_assert!(liquidity_gross == 0);
-    }
+        (-upper_tick_info.liquidity_net) as u128
+    };
+    cvlr_assert!(abs_net_upper <= upper_tick_info.liquidity_gross);
 }
 
-/// RULE: Bitmap is consistent with tick initialization
+/// RULE: Initialized tick has liquidity_gross > 0
+/// After minting, the ticks should have positive liquidity_gross
 #[cfg(feature = "certora")]
 #[rule]
-pub fn bitmap_consistent_with_tick_init(
-    bitmap_bit_set: bool,
-    tick_liquidity_gross: u128,
+pub fn initialized_tick_has_liquidity(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    tick_lower: i32,
+    tick_upper: i32,
+    liquidity_amount: u128,
 ) {
-    if bitmap_bit_set {
-        cvlr_assert!(tick_liquidity_gross > 0);
-    } else {
-        cvlr_assert!(tick_liquidity_gross == 0);
-    }
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(liquidity_amount > 0);
+
+    let tick_spacing: i32 = 60;
+    cvlr_assume!(tick_lower >= MIN_TICK && tick_upper <= MAX_TICK);
+    cvlr_assume!(tick_lower < tick_upper);
+    cvlr_assume!(tick_lower % tick_spacing == 0);
+    cvlr_assume!(tick_upper % tick_spacing == 0);
+
+    let fee: u32 = 3000;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    // Mint liquidity
+    let _amounts = DexPool::mint(
+        env.clone(),
+        recipient.clone(),
+        tick_lower,
+        tick_upper,
+        liquidity_amount,
+    );
+
+    // After minting, ticks should be initialized with liquidity
+    let lower_tick_info = DexPool::get_tick(env.clone(), tick_lower);
+    let upper_tick_info = DexPool::get_tick(env.clone(), tick_upper);
+
+    cvlr_assert!(lower_tick_info.liquidity_gross > 0);
+    cvlr_assert!(upper_tick_info.liquidity_gross > 0);
+    cvlr_assert!(lower_tick_info.initialized);
+    cvlr_assert!(upper_tick_info.initialized);
 }
 
-/// RULE: Next initialized tick search respects direction
+/// RULE: Uninitialized tick has liquidity_gross == 0
 #[cfg(feature = "certora")]
 #[rule]
-pub fn next_tick_respects_direction(
-    current_tick: i32,
-    next_tick: i32,
-    zero_for_one: bool,
+pub fn uninitialized_tick_has_no_liquidity(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    tick: i32,
 ) {
-    if zero_for_one {
-        cvlr_assert!(next_tick <= current_tick);
-    } else {
-        cvlr_assert!(next_tick >= current_tick);
-    }
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
+
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    // Without any mints, all ticks should be uninitialized
+    let tick_info = DexPool::get_tick(env.clone(), tick);
+
+    cvlr_assert!(tick_info.liquidity_gross == 0);
+    cvlr_assert!(tick_info.liquidity_net == 0);
+    cvlr_assert!(!tick_info.initialized);
 }
 
-/// RULE: Fee tier determines tick spacing
+/// RULE: Fee growth at tick starts at zero for fresh pool
 #[cfg(feature = "certora")]
 #[rule]
-pub fn fee_tier_tick_spacing_relationship(fee: u32, tick_spacing: i32) {
-    if fee == 500 {
-        cvlr_assert!(tick_spacing == 10);
-    } else if fee == 3000 {
-        cvlr_assert!(tick_spacing == 60);
-    } else if fee == 10000 {
-        cvlr_assert!(tick_spacing == 200);
-    }
+pub fn tick_fee_growth_starts_zero(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    tick: i32,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
+
+    let fee: u32 = 3000;
+    let tick_spacing: i32 = 60;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let tick_info = DexPool::get_tick(env.clone(), tick);
+
+    // Fee growth outside should be zero for uninitialized ticks
+    cvlr_assert!(tick_info.fee_growth_outside_0_x128 == 0);
+    cvlr_assert!(tick_info.fee_growth_outside_1_x128 == 0);
+}
+
+/// RULE: Minted tick at lower boundary has positive liquidity_net
+#[cfg(feature = "certora")]
+#[rule]
+pub fn lower_tick_has_positive_net(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    tick_lower: i32,
+    tick_upper: i32,
+    liquidity_amount: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(liquidity_amount > 0);
+
+    let tick_spacing: i32 = 60;
+    cvlr_assume!(tick_lower >= MIN_TICK && tick_upper <= MAX_TICK);
+    cvlr_assume!(tick_lower < tick_upper);
+    cvlr_assume!(tick_lower % tick_spacing == 0);
+    cvlr_assume!(tick_upper % tick_spacing == 0);
+
+    let fee: u32 = 3000;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let _amounts = DexPool::mint(
+        env.clone(),
+        recipient.clone(),
+        tick_lower,
+        tick_upper,
+        liquidity_amount,
+    );
+
+    let lower_tick_info = DexPool::get_tick(env.clone(), tick_lower);
+
+    // Lower tick should have positive net (liquidity enters here)
+    cvlr_assert!(lower_tick_info.liquidity_net > 0);
+    cvlr_assert!(lower_tick_info.liquidity_net == liquidity_amount as i128);
+}
+
+/// RULE: Minted tick at upper boundary has negative liquidity_net
+#[cfg(feature = "certora")]
+#[rule]
+pub fn upper_tick_has_negative_net(
+    env: Env,
+    factory: Address,
+    token0: Address,
+    token1: Address,
+    sqrt_price_x96: u128,
+    recipient: Address,
+    tick_lower: i32,
+    tick_upper: i32,
+    liquidity_amount: u128,
+) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
+
+    cvlr_assume!(token0 < token1);
+    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO && sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(liquidity_amount > 0);
+
+    let tick_spacing: i32 = 60;
+    cvlr_assume!(tick_lower >= MIN_TICK && tick_upper <= MAX_TICK);
+    cvlr_assume!(tick_lower < tick_upper);
+    cvlr_assume!(tick_lower % tick_spacing == 0);
+    cvlr_assume!(tick_upper % tick_spacing == 0);
+
+    let fee: u32 = 3000;
+    DexPool::initialize(
+        env.clone(),
+        factory.clone(),
+        token0.clone(),
+        token1.clone(),
+        fee,
+        tick_spacing,
+        sqrt_price_x96,
+    );
+
+    let _amounts = DexPool::mint(
+        env.clone(),
+        recipient.clone(),
+        tick_lower,
+        tick_upper,
+        liquidity_amount,
+    );
+
+    let upper_tick_info = DexPool::get_tick(env.clone(), tick_upper);
+
+    // Upper tick should have negative net (liquidity exits here)
+    cvlr_assert!(upper_tick_info.liquidity_net < 0);
+    cvlr_assert!(upper_tick_info.liquidity_net == -(liquidity_amount as i128));
 }
 
 // ============================================================================
-// TESTS (run with cargo test)
+// UNIT TESTS
 // ============================================================================
 
 #[cfg(test)]
@@ -150,20 +408,6 @@ mod tests {
 
         let unaligned_tick = 125;
         assert_ne!(unaligned_tick % tick_spacing, 0);
-    }
-
-    #[test]
-    fn test_bitmap_indices() {
-        let tick = 120;
-        let tick_spacing = 60;
-        let compressed = tick / tick_spacing; // = 2
-
-        let word_pos = compressed >> 8; // = 0
-        let bit_pos = compressed & 0xFF; // = 2
-
-        assert_eq!(word_pos, 0);
-        assert_eq!(bit_pos, 2);
-        assert!(bit_pos < 256);
     }
 
     #[test]
@@ -189,31 +433,5 @@ mod tests {
 
         let next_tick_up = 140;
         assert!(next_tick_up >= current_tick);
-    }
-
-    #[test]
-    fn test_fee_tier_spacing() {
-        // 0.05% fee -> tick spacing 10
-        assert_eq!(10, 10);
-
-        // 0.3% fee -> tick spacing 60
-        assert_eq!(60, 60);
-
-        // 1% fee -> tick spacing 200
-        assert_eq!(200, 200);
-    }
-
-    #[test]
-    fn test_tick_update() {
-        let liquidity_gross_before: u128 = 1000;
-        let liquidity_net_before: i128 = 500;
-        let liquidity_delta: i128 = 200;
-
-        let liquidity_gross_after = liquidity_gross_before + (liquidity_delta as u128);
-        let liquidity_net_after = liquidity_net_before + liquidity_delta;
-
-        assert_eq!(liquidity_gross_after, 1200);
-        assert_eq!(liquidity_net_after, 700);
-        assert!(liquidity_net_after.abs() as u128 <= liquidity_gross_after);
     }
 }
