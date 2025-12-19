@@ -23,53 +23,42 @@ use cvlr_soroban_derive::rule;
 #[cfg(feature = "certora")]
 use cvlr::asserts::{cvlr_assert, cvlr_assume, cvlr_satisfy};
 
-/// RULE: Pool sqrt_price is always within valid bounds
+/// RULE: Price derived from a valid tick stays within allowed sqrt bounds.
 #[cfg(feature = "certora")]
 #[rule]
-pub fn price_always_in_bounds(sqrt_price_x96: u128) {
-    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO};
+pub fn price_from_tick_in_bounds(tick: i32, env: soroban_sdk::Env) {
+    use dex_types::{MAX_SQRT_RATIO, MIN_SQRT_RATIO, MAX_TICK, MIN_TICK};
 
-    // Valid pool states have price in bounds
-    cvlr_assume!(sqrt_price_x96 > MIN_SQRT_RATIO);
-    cvlr_assume!(sqrt_price_x96 < MAX_SQRT_RATIO);
+    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
+    let sqrt_price = dex_math::get_sqrt_ratio_at_tick(&env, tick);
 
-    cvlr_satisfy!(true);
+    cvlr_assert!(sqrt_price >= MIN_SQRT_RATIO);
+    cvlr_assert!(sqrt_price <= MAX_SQRT_RATIO);
 }
 
-/// RULE: Pool tick is always within valid bounds
+/// RULE: Tick recovered from a price computed at that tick differs by at most 1.
 #[cfg(feature = "certora")]
 #[rule]
-pub fn tick_always_in_bounds(tick: i32) {
+pub fn tick_price_roundtrip_stable(tick: i32, env: soroban_sdk::Env) {
     use dex_types::{MAX_TICK, MIN_TICK};
 
-    cvlr_assume!(tick >= MIN_TICK);
-    cvlr_assume!(tick <= MAX_TICK);
+    cvlr_assume!(tick >= MIN_TICK && tick <= MAX_TICK);
 
-    cvlr_satisfy!(true);
+    let sqrt_price = dex_math::get_sqrt_ratio_at_tick(&env, tick);
+    let recovered = dex_math::get_tick_at_sqrt_ratio(&env, sqrt_price);
+    let diff = if recovered > tick { recovered - tick } else { tick - recovered };
+
+    cvlr_assert!(diff <= 1);
 }
 
-/// RULE: Fee growth only increases (wrapping arithmetic)
+/// RULE: Fee growth is non-decreasing (no wrap-around decrease).
 #[cfg(feature = "certora")]
 #[rule]
-pub fn fee_growth_monotonic(
-    fee_growth_before: u128,
-    fee_growth_after: u128,
-) {
-    // Fee growth increases are bounded by half the max value
-    // (to allow for wrapping arithmetic detection)
-    let diff = fee_growth_after.wrapping_sub(fee_growth_before);
-    cvlr_assert!(diff < u128::MAX / 2);
+pub fn fee_growth_non_decreasing(fee_growth_before: u128, fee_growth_after: u128) {
+    cvlr_assert!(fee_growth_after >= fee_growth_before);
 }
 
-/// RULE: Fee is within valid range (max 100%)
-#[cfg(feature = "certora")]
-#[rule]
-pub fn fee_in_valid_range(fee: u32) {
-    // Fee in hundredths of bps, max 100% = 1_000_000
-    cvlr_assert!(fee <= 1_000_000);
-}
-
-/// RULE: Tick spacing is positive
+/// RULE: Tick spacing must be positive.
 #[cfg(feature = "certora")]
 #[rule]
 pub fn tick_spacing_positive(tick_spacing: i32) {
