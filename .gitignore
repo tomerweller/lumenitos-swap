@@ -27,3 +27,4 @@ Thumbs.db
 
 # Certora internal files
 .certora_internal/
+emv-*
