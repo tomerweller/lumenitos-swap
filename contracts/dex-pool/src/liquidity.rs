@@ -2,7 +2,14 @@ use crate::storage::{get_config, get_position, get_state, set_position, set_stat
 use crate::tick::{flip_tick, get_fee_growth_inside, update as update_tick};
 use dex_math::{add_delta, get_sqrt_ratio_at_tick};
 use dex_types::{PositionInfo, PositionKey};
-use soroban_sdk::{token, Address, Env};
+
+use soroban_sdk::{Address, Env};
+
+#[cfg(feature = "certora")]
+use crate::token;
+
+#[cfg(not(feature = "certora"))]
+use soroban_sdk::token as token;
 
 /// Mint (add) liquidity to a position
 pub fn mint(

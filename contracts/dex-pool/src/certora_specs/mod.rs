@@ -26,6 +26,7 @@
 // ============================================================================
 
 // Spec modules with unit tests validating invariants
+pub mod token;
 pub mod math_specs;
 pub mod pool_state_specs;
 pub mod swap_specs;

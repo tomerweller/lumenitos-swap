@@ -28,7 +28,13 @@ use dex_math::{add_delta, compute_swap_step, get_sqrt_ratio_at_tick};
 use dex_types::{
     SwapComputation, SwapParams, SwapState, MAX_SQRT_RATIO, MIN_SQRT_RATIO,
 };
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{Address, Env};
+
+#[cfg(feature = "certora")]
+use crate::token as token;
+
+#[cfg(not(feature = "certora"))]
+use soroban_sdk::token as token;
 
 // ============================================================================
 // PURE FUNCTIONS - No storage access, formally verifiable
